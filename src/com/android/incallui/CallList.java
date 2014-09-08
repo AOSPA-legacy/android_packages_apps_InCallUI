@@ -23,6 +23,7 @@ import com.google.common.base.Preconditions;
 
 import android.os.Handler;
 import android.os.Message;
+import android.text.TextUtils;
 
 import android.telephony.MSimTelephonyManager;
 import com.android.internal.telephony.MSimConstants;
@@ -30,6 +31,7 @@ import com.android.services.telephony.common.Call;
 import com.android.services.telephony.common.Call.DisconnectCause;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
@@ -114,6 +116,8 @@ public class CallList {
         // will switch active sub to a wrong sub(which is not ringing)
         if (MSimTelephonyManager.getDefault().isMultiSimEnabled())
             CallCommandClient.getInstance().setActiveSubscription(call.getSubscription());
+        // will switch active sub to to a incorrect sub(which is not ringing)
+        CallCommandClient.getInstance().setActiveSubscription(call.getSubscription());
         updateActiveSuscription();
 
         updateCallInMap(call);
@@ -562,15 +566,18 @@ public class CallList {
      * This method checks whether any other subscription currently has active voice
      * call other than current active subscription, if yes it makes that other
      * subscription as active subscription i.e user visible subscription.
+     * @param retainLch  whether to retain the LCH state of the other active sub
      */
-    public boolean switchToOtherActiveSubscription() {
+    public boolean switchToOtherActiveSubscription(boolean retainLch) {
         int activeSub = getActiveSubscription();
         boolean subSwitched = false;
 
         for (int i = 0; i < MSimTelephonyManager.getDefault().getPhoneCount(); i++) {
             if ((i != activeSub) && existsLiveCall(i)) {
-                Log.i(this, "switchToOtherActiveSubscription, sub = " + i);
+                Log.i(this, "switchToOtherActiveSubscription, sub = " + i +
+                        " retainLch = " + retainLch);
                 subSwitched = true;
+                CallCommandClient.getInstance().setActiveSubscription(i, retainLch);
                 setActiveSubscription(i);
                 break;
             }
@@ -623,6 +630,15 @@ public class CallList {
             }
         }
         return retval;
+    }
+
+    public Call getCallWithStateAndNumber(int state, String number) {
+        for (Call call : mCallMap.values()) {
+            if (TextUtils.equals(call.getNumber(), number) && call.getState() == state) {
+                return call;
+            }
+        }
+        return null;
     }
 
     public void addActiveSubChangeListener(ActiveSubChangeListener listener) {
