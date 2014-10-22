@@ -18,6 +18,10 @@ package com.android.incallui;
 
 import android.content.Context;
 import android.content.res.Configuration;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.database.ContentObserver;
 import android.os.Handler;
 import android.os.PowerManager;
@@ -39,10 +43,12 @@ import com.google.common.base.Objects;
  * public methods.
  */
 public class ProximitySensor implements AccelerometerListener.OrientationListener,
-        InCallStateListener, AudioModeListener {
+        InCallStateListener, AudioModeListener, SensorEventListener {
     private static final String TAG = ProximitySensor.class.getSimpleName();
 
     private final PowerManager mPowerManager;
+    private SensorManager mSensor;
+    private Sensor mProxSensor;
     private PowerManager.WakeLock mProximityWakeLock;
     private final AudioModeProvider mAudioModeProvider;
     private final AccelerometerListener mAccelerometerListener;
@@ -50,6 +56,7 @@ public class ProximitySensor implements AccelerometerListener.OrientationListene
     private int mOrientation = AccelerometerListener.ORIENTATION_UNKNOWN;
     private boolean mUiShowing = false;
     private boolean mIsPhoneOffhook = false;
+    private boolean mProximitySpeaker = false;
     private boolean mDialpadVisible;
     private Context mContext;
 
@@ -66,9 +73,17 @@ public class ProximitySensor implements AccelerometerListener.OrientationListene
 
     public ProximitySensor(Context context, AudioModeProvider audioModeProvider) {
         mContext = context;
-        mPowerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        mPowerManager = (PowerManager) mContext.getSystemService(Context.POWER_SERVICE);
 
-        mAccelerometerListener = new AccelerometerListener(context, this);
+        if (mPowerManager.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+            mSensor = (SensorManager) mContext.getSystemService(Context.SENSOR_SERVICE);
+            mProxSensor = mSensor.getDefaultSensor(Sensor.TYPE_PROXIMITY);
+        } else {
+            mProxSensor = null;	
+            mSensor = null;
+	}
+
+        mAccelerometerListener = new AccelerometerListener(mContext, this);
         mProximityListener = new ProximityListener(context);
         mAudioModeProvider = audioModeProvider;
         context.getContentResolver().registerContentObserver(Settings.System.CONTENT_URI, true,
@@ -133,6 +148,7 @@ public class ProximitySensor implements AccelerometerListener.OrientationListene
             mAccelerometerListener.enable(mIsPhoneOffhook);
             mProximityListener.enable(mIsPhoneOffhook);
 
+            updateProxSpeaker();
             updateProximitySensorMode();
         }
     }
@@ -151,6 +167,22 @@ public class ProximitySensor implements AccelerometerListener.OrientationListene
     @Override
     public void onAudioMode(int mode) {
         updateProximitySensorMode();
+    }
+
+    /**	
+     * Proximity state changed
+     */	
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+        if (event.values[0] == 0) {
+            setProxSpeaker(false);
+        } else {
+            setProxSpeaker(true);
+       }
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
     }
 
     public void onDialpadVisible(boolean visible) {
@@ -293,4 +325,28 @@ public class ProximitySensor implements AccelerometerListener.OrientationListene
         }
     }
 
+    private void updateProxSpeaker() {
+        if (mSensor != null && mProxSensor != null) {
+            if (mIsPhoneOffhook) {
+                mSensor.registerListener(this, mProxSensor,
+                        SensorManager.SENSOR_DELAY_NORMAL);
+            } else {
+                mSensor.unregisterListener(this);
+            }
+        }
+    }
+
+    private void setProxSpeaker(final boolean speaker) {
+        if (Settings.System.getInt(mContext.getContentResolver(),
+                Settings.System.PROXIMITY_AUTO_SPEAKER, 0) == 1) {
+            final int audioMode = mAudioModeProvider.getAudioMode();
+            final boolean speakerCapable = AudioMode.EARPIECE == audioMode
+                    && mIsPhoneOffhook;
+            if (speaker && speakerCapable) {
+                CallCommandClient.getInstance().setAudioMode(AudioMode.SPEAKER);
+            } else if (!speaker && mIsPhoneOffhook && AudioMode.SPEAKER == audioMode) {
+                CallCommandClient.getInstance().setAudioMode(AudioMode.EARPIECE);
+            }
+        }
+    }
 }
